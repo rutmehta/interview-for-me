@@ -8,6 +8,7 @@ import { AppState } from "./main" // Adjust the import path if necessary
 import dotenv from "dotenv"
 import { OpenAI } from "openai"
 import path from "path"
+import fsExtra from "fs-extra"
 
 dotenv.config()
 
@@ -175,6 +176,255 @@ export class ProcessingHelper {
     }
   }
 
+  public async processAudioInput(audioFilePath: string): Promise<any> {
+    try {
+      const mainWindow = this.appState.getMainWindow();
+      if (!mainWindow) return { success: false, error: "Main window not available" };
+
+      // Initialize AbortController
+      this.currentProcessingAbortController = new AbortController();
+      const { signal } = this.currentProcessingAbortController;
+
+      try {
+        mainWindow.webContents.send(this.appState.PROCESSING_EVENTS.INITIAL_START);
+        this.appState.setView("solutions");
+
+        console.log(`Processing audio file: ${audioFilePath}`);
+        
+        // Check if the file exists
+        if (!await fsExtra.pathExists(audioFilePath)) {
+          throw new Error(`Audio file not found: ${audioFilePath}`);
+        }
+
+        console.log("Audio file exists, starting processing");
+        
+        try {
+          // Step 1: Transcribe the audio using OpenAI's API
+          console.log("Transcribing audio with OpenAI...");
+          
+          // Use the OpenAI SDK directly with a ReadStream
+          const transcription = await openai.audio.transcriptions.create({
+            file: fs.createReadStream(audioFilePath),
+            model: "whisper-1", // Using the available Whisper model
+          });
+          
+          // Extract the transcript
+          const transcript = transcription.text;
+          console.log("TRANSCRIPTION COMPLETE:", transcript);
+          
+          // Display the transcript in a clear way in the console
+          const transcriptBox = `
+╔════════════════════════════════════════════════════════════════════════════════╗
+║ TRANSCRIPT:                                                                    ║
+╠════════════════════════════════════════════════════════════════════════════════╣
+║ ${transcript.replace(/(.{78})/g, "$1\n║ ")}
+╚════════════════════════════════════════════════════════════════════════════════╝`;
+          
+          console.log(transcriptBox);
+          
+          // Step 2: Analyze the transcript to determine if it's a coding question
+          console.log("Analyzing transcript to identify question type...");
+          const analysisResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: "You are an expert at analyzing programming-related questions. Your task is to determine if the transcript contains a coding problem, technical interview question, or general programming question. Identify the type of question and structure it appropriately."
+              },
+              {
+                role: "user",
+                content: `Analyze this transcript from a technical interview and determine what type of question it is. It could be a coding problem (like a LeetCode problem), a design question, a technical knowledge question, or something else. Extract the key information and format it appropriately. If it's a coding problem, identify the problem statement, input/output format, constraints, and any test cases mentioned.\n\nTranscript: ${transcript}`
+              }
+            ],
+            max_tokens: 1024,
+          });
+          
+          const analysis = analysisResponse.choices[0]?.message?.content || "";
+          console.log("Question analysis:", analysis);
+          
+          // Step 3: Extract the question structure based on the analysis
+          const extractionResponse = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              {
+                role: "system",
+                content: "You are an expert at structuring programming questions for solution generation. Based on the question analysis, extract and format the question in a structured JSON format."
+              },
+              {
+                role: "user",
+                content: `Based on this analysis of a technical interview question, extract and structure the question in JSON format. If it's a coding problem (like a LeetCode problem), the JSON should include 'type' set to 'leetcode_problem', 'problem_statement', 'input_format' (with description and parameters array), 'output_format' (with description and type), 'constraints' array, and 'test_cases' array. If it's a technical knowledge or design question, the JSON should include 'type' set to 'technical_question', 'question', 'context', and 'expected_answer_topics' array.\n\nAnalysis: ${analysis}\n\nTranscript: ${transcript}`
+              }
+            ],
+            max_tokens: 1500,
+            response_format: { type: "json_object" }
+          });
+          
+          const extractedQuestion = extractionResponse.choices[0]?.message?.content || "";
+          console.log("Extracted question structure:", extractedQuestion);
+          
+          // Parse the extracted question
+          let questionData;
+          try {
+            questionData = JSON.parse(extractedQuestion);
+          } catch (e) {
+            console.error("Error parsing question JSON:", e);
+            // Try to extract JSON from the response
+            const jsonMatch = extractedQuestion.match(/```json\n([\s\S]*?)\n```/) || 
+                            extractedQuestion.match(/{[\s\S]*}/) ||
+                            [null, extractedQuestion];
+            
+            const jsonContent = jsonMatch[1] || extractedQuestion;
+            questionData = JSON.parse(jsonContent);
+          }
+          
+          // Determine the question type and structure
+          const questionType = questionData.type || "technical_question";
+          
+          // Store problem info in AppState
+          const problemInfo = {
+            type: questionType,
+            ...questionData
+          };
+          
+          this.appState.setProblemInfo(problemInfo);
+          
+          // Send problem extracted event
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.PROBLEM_EXTRACTED,
+            problemInfo
+          );
+          
+          // Generate a solution
+          console.log("Generating solution...");
+          
+          let formattedSolution;
+          
+          if (questionType === "leetcode_problem") {
+            const leetcodeSolutionResponse = await openai.chat.completions.create({
+              model: "gpt-4o-mini",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are an expert programmer who provides optimal solutions to coding problems with detailed explanations and time/space complexity analysis."
+                },
+                {
+                  role: "user",
+                  content: `Solve this coding problem with detailed explanations, time and space complexity analysis, and code in both Python and JavaScript:\n\n${JSON.stringify(problemInfo)}`
+                }
+              ],
+              max_tokens: 2500,
+            });
+            
+            const solution = leetcodeSolutionResponse.choices[0]?.message?.content || "";
+            
+            // Extract code blocks
+            const pythonCodeMatch = solution.match(/```python\s*([\s\S]*?)\s*```/);
+            const jsCodeMatch = solution.match(/```javascript\s*([\s\S]*?)\s*```/) || solution.match(/```js\s*([\s\S]*?)\s*```/);
+            
+            formattedSolution = {
+              type: "leetcode_problem",
+              problem_statement: problemInfo.problem_statement,
+              input_format: problemInfo.input_format,
+              output_format: problemInfo.output_format,
+              constraints: problemInfo.constraints,
+              test_cases: problemInfo.test_cases,
+              solution: {
+                explanation: solution,
+                code: pythonCodeMatch ? pythonCodeMatch[1] : "# No Python solution provided",
+                code_map: {
+                  python: pythonCodeMatch ? pythonCodeMatch[1] : "# No Python solution provided",
+                  javascript: jsCodeMatch ? jsCodeMatch[1] : "// No JavaScript solution provided"
+                },
+                time_complexity: solution.match(/[tT]ime [cC]omplexity:?\s*(O\([^)]+\))/)?.[1] || "O(n)",
+                space_complexity: solution.match(/[sS]pace [cC]omplexity:?\s*(O\([^)]+\))/)?.[1] || "O(n)"
+              }
+            };
+          } else {
+            // Technical question or design question
+            const technicalSolutionResponse = await openai.chat.completions.create({
+              model: "gpt-4o-mini",
+              messages: [
+                {
+                  role: "system",
+                  content: "You are a technical interview expert who provides detailed answers to technical questions. Format your response in a clear, organized way with examples where appropriate."
+                },
+                {
+                  role: "user",
+                  content: `Please provide a detailed answer to this technical question: ${questionData.question}\n\nContext: ${questionData.context || "General programming question"}`
+                }
+              ],
+              max_tokens: 2000,
+            });
+            
+            const solution = technicalSolutionResponse.choices[0]?.message?.content || "";
+            
+            // Extract code example if present
+            const codeExampleMatch = solution.match(/```(?:javascript|js|python|java|c\+\+|cpp|typescript|ts)\s*([\s\S]*?)\s*```/);
+            const codeExample = codeExampleMatch ? codeExampleMatch[0] : "";
+            
+            // Extract key points
+            const keyPointsMatch = solution.match(/(?:Key Points|Summary|Important Points|Key Takeaways):([\s\S]*?)(?:\n\n|\n#|\n\*\*|$)/i);
+            let keyPoints = [];
+            
+            if (keyPointsMatch) {
+              keyPoints = keyPointsMatch[1].split(/\n\s*[\-\*]\s*/).filter(Boolean).map(point => point.trim());
+            } else {
+              // Create some basic key points from the solution
+              keyPoints = solution.split(/\n\n/).slice(0, 5).map(p => p.substring(0, 100).trim()).filter(Boolean);
+            }
+            
+            formattedSolution = {
+              type: questionType,
+              question: questionData.question,
+              context: questionData.context,
+              expected_answer_topics: questionData.expected_answer_topics || [],
+              solution: {
+                answer: solution,
+                key_points: keyPoints.length > 0 ? keyPoints : [
+                  "Key point 1 from answer",
+                  "Key point 2 from answer",
+                  "Key point 3 from answer"
+                ],
+                code_example: codeExample
+              }
+            };
+          }
+          
+          // Send the formatted solution
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS,
+            formattedSolution
+          );
+          
+          return { success: true, data: formattedSolution };
+        } catch (error) {
+          console.error("Error during audio processing:", error);
+          throw error;
+        }
+      } catch (error: any) {
+        if (axios.isCancel(error)) {
+          console.log("Audio processing request canceled");
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            "Audio processing was canceled by the user."
+          );
+        } else {
+          console.error("Audio processing error:", error);
+          mainWindow.webContents.send(
+            this.appState.PROCESSING_EVENTS.INITIAL_SOLUTION_ERROR,
+            error.message
+          );
+        }
+        return { success: false, error: error.message };
+      } finally {
+        this.currentProcessingAbortController = null;
+      }
+    } catch (error: any) {
+      console.error("Audio processing error:", error);
+      return { success: false, error: error.message };
+    }
+  }
+
   private async processScreenshotsHelper(
     screenshots: Array<{ path: string }>,
     signal: AbortSignal
@@ -237,7 +487,7 @@ export class ProcessingHelper {
             parsedContent = JSON.parse(jsonContent);
           } catch (e) {
             console.error("Error parsing JSON response from OpenAI:", e);
-            // Try one more time with a more lenient approach
+            // Try to find anything that looks like a JSON object
             try {
               // Try to find anything that looks like a JSON object
               const potentialJson = aiResponse.substring(
@@ -480,6 +730,7 @@ export class ProcessingHelper {
                 {
                   role: "user",
                   content: `Here's the problem:
+                          
                           ${JSON.stringify(problemInfo)}
                           
                           Generate an optimal solution with detailed explanations, and provide the full code implementation 
@@ -830,88 +1081,26 @@ export class ProcessingHelper {
   }
 
   // Helper function to extract and sanitize JSON
-  private extractValidJson(text: string): any {
-    console.log("Attempting to extract valid JSON");
-    
-    // Clean up any control characters that might be in the text
-    const sanitizedText = text.replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
-    
-    // Try direct parsing first
+  private extractValidJson(jsonString: string): any {
     try {
-      return JSON.parse(sanitizedText);
+      return JSON.parse(jsonString);
     } catch (e) {
-      console.log("Direct parsing failed, trying alternative methods");
-    }
-    
-    // Look for JSON between triple backticks
-    const jsonMatch = sanitizedText.match(/```json\n([\s\S]*?)\n```/) || 
-                     sanitizedText.match(/```\n([\s\S]*?)\n```/) ||
-                     sanitizedText.match(/```([\s\S]*?)```/);
-    
-    if (jsonMatch && jsonMatch[1]) {
-      try {
-        return JSON.parse(jsonMatch[1]);
-      } catch (e) {
-        console.log("Backtick JSON parsing failed", e);
-      }
-    }
-    
-    // Try to find anything that looks like a JSON object with balanced braces
-    try {
-      const startIdx = sanitizedText.indexOf('{');
-      if (startIdx !== -1) {
-        let openBraces = 0;
-        let endIdx = -1;
-        
-        for (let i = startIdx; i < sanitizedText.length; i++) {
-          if (sanitizedText[i] === '{') openBraces++;
-          else if (sanitizedText[i] === '}') {
-            openBraces--;
-            if (openBraces === 0) {
-              endIdx = i + 1;
-              break;
-            }
-          }
-        }
-        
-        if (endIdx !== -1) {
-          const potentialJson = sanitizedText.substring(startIdx, endIdx);
-          // Clean up potential issues
-          const sanitized = potentialJson
-            .replace(/(\w+)(?=\s*:)/g, '"$1"') // Ensure property names are quoted
-            .replace(/:\s*'([^']*)'/g, ': "$1"') // Replace single quotes with double quotes
-            .replace(/,\s*}/g, '}') // Remove trailing commas
-            .replace(/,\s*]/g, ']'); // Remove trailing commas in arrays
-            
-          return JSON.parse(sanitized);
-        }
-      }
-    } catch (e) {
-      console.log("Advanced JSON extraction failed", e);
-    }
-    
-    // If all else fails, try to reconstruct a minimal valid JSON
-    try {
-      // Extract the most important parts if present
-      const explanation = text.match(/explanation[\s\S]*?:[\s\S]*?["'](.+?)["']/i)?.[1] || "";
-      const jsCode = text.match(/javascript[\s\S]*?:[\s\S]*?["'](.+?)["']/i)?.[1] || 
-                 text.match(/```javascript\s*([\s\S]*?)\s*```/)?.[1] || "";
-      const pyCode = text.match(/python[\s\S]*?:[\s\S]*?["'](.+?)["']/i)?.[1] || 
-                text.match(/```python\s*([\s\S]*?)\s*```/)?.[1] || "";
+      // Try to extract JSON from string with markdown code blocks
+      const jsonMatch = jsonString.match(/```json\n([\s\S]*?)\n```/) || 
+                       jsonString.match(/{[\s\S]*}/) ||
+                       [null, jsonString];
       
-      return {
-        solution: {
-          explanation: explanation,
-          complexity: { time: "O(n)", space: "O(n)" },
-          code: {
-            javascript: jsCode,
-            python: pyCode
-          }
-        }
-      };
-    } catch (e) {
-      console.log("Last resort JSON creation failed", e);
-      throw new Error("Could not extract valid JSON from response");
+      const jsonContent = jsonMatch[1] || jsonString;
+      try {
+        return JSON.parse(jsonContent);
+      } catch (e2) {
+        // Try one more approach - find anything between { and } brackets
+        const potentialJson = jsonString.substring(
+          jsonString.indexOf('{'), 
+          jsonString.lastIndexOf('}') + 1
+        );
+        return JSON.parse(potentialJson);
+      }
     }
   }
 

@@ -47,7 +47,7 @@ const SolutionSection = ({
   title,
   content,
   isLoading,
-  language = "python",
+  language = "javascript",
   onLanguageChange
 }: {
   title: string
@@ -63,7 +63,7 @@ const SolutionSection = ({
       </h2>
       {onLanguageChange && (
         <div className="text-xs text-gray-400">
-          Press <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Cmd+L</kbd> to toggle language: <span className="text-white">{language === "python" ? "Python" : "JavaScript"}</span>
+          Press <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Cmd+L</kbd> to toggle language: <span className="text-white">{language === "javascript" ? "JavaScript" : language === "python" ? "Python" : language === "c" ? "C" : language === "cpp" ? "C++" : language}</span>
         </div>
       )}
     </div>
@@ -227,7 +227,10 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   }
 
   const toggleLanguage = () => {
-    const newLanguage = solutionLanguage === "javascript" ? "python" : "javascript";
+    const languagesList = ["javascript", "python", "c", "cpp"];
+    const currentIndex = languagesList.indexOf(solutionLanguage);
+    const nextIndex = (currentIndex + 1) % languagesList.length;
+    const newLanguage = languagesList[nextIndex];
     handleLanguageChange(newLanguage);
   }
 
@@ -473,17 +476,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
             extraScreenshots={extraScreenshots}
             onTooltipVisibilityChange={handleTooltipVisibilityChange}
             currentLanguage={solutionLanguage}
-            onLanguageToggle={() => {
-              // Toggle between JavaScript and Python
-              const newLanguage = solutionLanguage === "javascript" ? "python" : "javascript";
-              setSolutionLanguage(newLanguage);
-              
-              // Update solution data based on new language if code_map exists
-              const solution = queryClient.getQueryData(["solution"]) as any;
-              if (solution && solution.code_map && solution.code_map[newLanguage]) {
-                setSolutionData(solution.code_map[newLanguage]);
-              }
-            }}
+            onLanguageToggle={toggleLanguage}
           />
         </div>
 
@@ -656,11 +649,14 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
                                 ? 'javascript' 
                                 : technicalSolution.file_structure[currentFileIndex].path.endsWith('.py') 
                                   ? 'python' 
-                                  : technicalSolution.file_structure[currentFileIndex].path.endsWith('.css') 
-                                    ? 'css' 
-                                    : technicalSolution.file_structure[currentFileIndex].path.endsWith('.html') 
-                                      ? 'html' 
-                                      : 'text'
+                                  : technicalSolution.file_structure[currentFileIndex].path.endsWith('.cpp') || 
+                                    technicalSolution.file_structure[currentFileIndex].path.endsWith('.c') 
+                                      ? 'cpp' 
+                                      : technicalSolution.file_structure[currentFileIndex].path.endsWith('.css') 
+                                        ? 'css' 
+                                        : technicalSolution.file_structure[currentFileIndex].path.endsWith('.html') 
+                                          ? 'html' 
+                                          : 'text'
                             }
                             style={dracula}
                             customStyle={{

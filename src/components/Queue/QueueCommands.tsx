@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react"
 import { supabase } from "../../lib/supabase"
 import { IoLogOutOutline } from "react-icons/io5"
+import AudioRecording from "./AudioRecording"
+import { Toast, ToastVariant } from "../../components/ui/toast"
 
 interface QueueCommandsProps {
   onTooltipVisibilityChange: (visible: boolean, height: number) => void
@@ -13,6 +15,12 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
 }) => {
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
   const tooltipRef = useRef<HTMLDivElement>(null)
+  const [toastOpen, setToastOpen] = useState(false)
+  const [toastMessage, setToastMessage] = useState({
+    title: "",
+    description: "",
+    variant: "neutral" as ToastVariant
+  })
 
   useEffect(() => {
     let tooltipHeight = 0
@@ -34,8 +42,31 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
     await supabase.auth.signOut()
   }
 
+  const showToast = (title: string, description: string, variant: ToastVariant) => {
+    setToastMessage({ title, description, variant })
+    setToastOpen(true)
+  }
+
+  const handleRecordingComplete = () => {
+    showToast("Processing", "Processing verbal question...", "neutral")
+  }
+
+  const handleRecordingError = (error: string) => {
+    showToast("Recording Error", error, "error")
+  }
+
   return (
     <div className="pt-2 w-fit">
+      <Toast
+        open={toastOpen}
+        onOpenChange={setToastOpen}
+        variant={toastMessage.variant}
+        duration={3000}
+      >
+        <div className="font-medium">{toastMessage.title}</div>
+        <div className="text-sm">{toastMessage.description}</div>
+      </Toast>
+
       <div className="text-xs text-white/90 backdrop-blur-md bg-black/60 rounded-lg py-2 px-4 flex items-center justify-center gap-4">
         {/* Show/Hide */}
         <div className="flex items-center gap-2">
@@ -64,6 +95,12 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Audio Recording Component */}
+        <AudioRecording 
+          onRecordingComplete={handleRecordingComplete} 
+          onRecordingError={handleRecordingError} 
+        />
 
         {/* Solve Command */}
         {screenshots.length > 0 && (
@@ -134,6 +171,17 @@ const QueueCommands: React.FC<QueueCommandsProps> = ({
                         Take a screenshot of the problem description. The tool
                         will extract and analyze the problem. The 5 latest
                         screenshots are saved.
+                      </p>
+                    </div>
+
+                    {/* Audio Recording Info */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="truncate">Record Verbal Question</span>
+                      </div>
+                      <p className="text-[10px] leading-relaxed text-white/70">
+                        Record an interviewer asking a verbal question. The tool will
+                        transcribe, analyze, and provide solutions to the question.
                       </p>
                     </div>
 

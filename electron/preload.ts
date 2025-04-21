@@ -32,6 +32,17 @@ interface ElectronAPI {
   takeScreenshot: () => Promise<void>
   moveWindowLeft: () => Promise<void>
   moveWindowRight: () => Promise<void>
+  
+  // Audio recording methods and events
+  startAudioRecording: () => Promise<{ success: boolean; error?: string }>
+  stopAudioRecording: () => Promise<{ success: boolean; error?: string; data?: any }>
+  onAudioRecordingStarted: (callback: () => void) => () => void
+  onAudioRecordingStopped: (callback: () => void) => () => void
+  onBeginRecording: (callback: (event: any, data: any) => void) => void
+  onStopRecording: (callback: () => void) => void
+  removeBeginRecordingListener: () => void
+  removeStopRecordingListener: () => void
+  saveAudioFile: (data: { path: string, buffer: Buffer }) => Promise<boolean>
 }
 
 export const PROCESSING_EVENTS = {
@@ -59,6 +70,40 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getScreenshots: () => ipcRenderer.invoke("get-screenshots"),
   deleteScreenshot: (path: string) =>
     ipcRenderer.invoke("delete-screenshot", path),
+
+  // Audio recording methods
+  startAudioRecording: () => ipcRenderer.invoke("start-audio-recording"),
+  stopAudioRecording: () => ipcRenderer.invoke("stop-audio-recording"),
+  onAudioRecordingStarted: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on('audio-recording-started', subscription)
+    return () => {
+      ipcRenderer.removeListener('audio-recording-started', subscription)
+    }
+  },
+  onAudioRecordingStopped: (callback: () => void) => {
+    const subscription = () => callback()
+    ipcRenderer.on('audio-recording-stopped', subscription)
+    return () => {
+      ipcRenderer.removeListener('audio-recording-stopped', subscription)
+    }
+  },
+
+  // Audio recording process handlers
+  onBeginRecording: (callback: (event: any, data: any) => void) => {
+    ipcRenderer.on('begin-recording', callback)
+  },
+  onStopRecording: (callback: () => void) => {
+    ipcRenderer.on('stop-recording', callback)
+  },
+  removeBeginRecordingListener: () => {
+    ipcRenderer.removeAllListeners('begin-recording')
+  },
+  removeStopRecordingListener: () => {
+    ipcRenderer.removeAllListeners('stop-recording')
+  },
+  saveAudioFile: (data: { path: string, buffer: Buffer }) => 
+    ipcRenderer.invoke('save-audio-file', data),
 
   // Event listeners
   onScreenshotTaken: (

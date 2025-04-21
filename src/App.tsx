@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from "react"
 import Solutions from "./_pages/Solutions"
 import { QueryClient, QueryClientProvider } from "react-query"
 import { supabase } from "./lib/supabase"
+import RecordingIndicator from "./components/RecordingIndicator"
+import AudioRecorder from "./components/AudioRecorder"
 
 declare global {
   interface Window {
@@ -25,6 +27,12 @@ declare global {
       onProcessingNoScreenshots: (callback: () => void) => () => void
       onResetView: (callback: () => void) => () => void
       takeScreenshot: () => Promise<void>
+
+      //AUDIO RECORDING METHODS
+      startAudioRecording: () => Promise<{ success: boolean; error?: string }>
+      stopAudioRecording: () => Promise<{ success: boolean; error?: string; data?: any }>
+      onAudioRecordingStarted: (callback: () => void) => () => void
+      onAudioRecordingStopped: (callback: () => void) => () => void
 
       //INITIAL SOLUTION EVENTS
       deleteScreenshot: (
@@ -151,6 +159,10 @@ const App: React.FC = () => {
           {view === "queue" && <Queue setView={setView} />}
           {view === "solutions" && <Solutions setView={setView} />}
           <ToastViewport />
+          {/* Add recording indicator - will only be visible during recording */}
+          <RecordingIndicator position="bottom-right" />
+          {/* Add the audio recorder component (invisible) */}
+          <AudioRecorder />
         </ToastProvider>
       </QueryClientProvider>
     </div>

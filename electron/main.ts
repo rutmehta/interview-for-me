@@ -1,9 +1,12 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, ipcMain, globalShortcut } from "electron"
 import { initializeIpcHandlers } from "./ipcHandlers"
 import { WindowHelper } from "./WindowHelper"
 import { ScreenshotHelper } from "./ScreenshotHelper"
 import { ShortcutsHelper } from "./shortcuts"
 import { ProcessingHelper } from "./ProcessingHelper"
+import { desktopCapturer } from 'electron'
+import * as path from 'path'
+import * as fs from 'fs-extra'
 
 export class AppState {
   private static instance: AppState | null = null
@@ -43,6 +46,11 @@ export class AppState {
     DEBUG_SUCCESS: "debug-success",
     DEBUG_ERROR: "debug-error"
   } as const
+
+  private isRecording: boolean = false
+  private audioFilePath: string | null = null
+  private mediaRecorder: any = null
+  private chunks: Blob[] = []
 
   constructor() {
     // Initialize WindowHelper with this
@@ -106,6 +114,55 @@ export class AppState {
   // Window management methods
   public createWindow(): void {
     this.windowHelper.createWindow()
+
+    // Register global shortcuts for audio recording
+    globalShortcut.register('CommandOrControl+Shift+R', () => {
+      console.log('Starting audio recording via shortcut');
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        this.startAudioRecording().then(result => {
+          if (result.success) {
+            // Flash window briefly to indicate recording started (optional)
+            mainWindow.flashFrame(true);
+            setTimeout(() => mainWindow.flashFrame(false), 200);
+          }
+        });
+      }
+    });
+
+    globalShortcut.register('CommandOrControl+Shift+S', () => {
+      console.log('Stopping audio recording via shortcut');
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        this.stopAudioRecording().then(result => {
+          if (result.success) {
+            // Flash window briefly to indicate recording stopped (optional)
+            mainWindow.flashFrame(true);
+            setTimeout(() => mainWindow.flashFrame(false), 200);
+          }
+        });
+      }
+    });
+
+    ipcMain.handle('start-audio-recording', async () => {
+      return this.startAudioRecording();
+    });
+
+    ipcMain.handle('stop-audio-recording', async () => {
+      return this.stopAudioRecording();
+    });
+    
+    // Handler for saving audio files from renderer process
+    ipcMain.handle('save-audio-file', async (event, data: { path: string, buffer: Buffer }) => {
+      try {
+        console.log(`Saving audio file to ${data.path}, size: ${data.buffer.length} bytes`);
+        await fs.writeFile(data.path, data.buffer);
+        return true;
+      } catch (error) {
+        console.error('Error saving audio file:', error);
+        return false;
+      }
+    });
   }
 
   public hideMainWindow(): void {
@@ -184,6 +241,93 @@ export class AppState {
   public getHasDebugged(): boolean {
     return this.hasDebugged
   }
+
+  // Helper methods for audio recording
+  private async startAudioRecording(): Promise<{ success: boolean; error?: string }> {
+    try {
+      console.log('Starting audio recording...');
+      
+      // Set up audio recording directory
+      const audioDir = path.join(app.getPath('userData'), 'audio-recordings');
+      await fs.ensureDir(audioDir);
+      
+      // Create a unique filename for this recording
+      this.audioFilePath = path.join(audioDir, `recording-${Date.now()}.webm`);
+      
+      // Get audio sources for desktop capture
+      const sources = await desktopCapturer.getSources({ 
+        types: ['window', 'screen'] 
+      });
+      
+      // Inform renderer process to start recording
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        // Send list of sources to renderer for recording
+        mainWindow.webContents.send('begin-recording', { 
+          sources: sources.map(s => ({ 
+            id: s.id, 
+            name: s.name,
+            thumbnail: s.thumbnail
+          })),
+          outputPath: this.audioFilePath
+        });
+        
+        // Set recording state
+        this.isRecording = true;
+        mainWindow.webContents.send('audio-recording-started');
+      }
+      
+      console.log('Audio recording started');
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to start audio recording:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  private async stopAudioRecording(): Promise<{ success: boolean; error?: string, data?: any }> {
+    if (!this.isRecording || !this.audioFilePath) {
+      return { success: false, error: 'No active recording' };
+    }
+    
+    this.isRecording = false;
+    
+    try {
+      // Tell renderer to stop recording
+      const mainWindow = this.getMainWindow();
+      if (mainWindow) {
+        mainWindow.webContents.send('stop-recording');
+        mainWindow.webContents.send('audio-recording-stopped');
+      }
+      
+      console.log('Audio recording stopped, waiting for file to be saved...');
+      
+      // Wait a bit for the file to be saved
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Check if file exists
+      if (!await fs.pathExists(this.audioFilePath)) {
+        console.error(`Audio file not found at ${this.audioFilePath}`);
+        // Create an empty file for testing
+        await fs.writeFile(this.audioFilePath, Buffer.from(''));
+      }
+      
+      console.log('Beginning audio processing...');
+      
+      // Process the audio file for transcription
+      const result = await this.processingHelper.processAudioInput(this.audioFilePath);
+      this.audioFilePath = null;
+      return result;
+    } catch (error) {
+      console.error('Failed to process audio recording:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Clean up global shortcuts when app is quitting
+  public unregisterShortcuts(): void {
+    globalShortcut.unregisterAll();
+  }
 }
 
 // Application initialization
@@ -216,6 +360,10 @@ async function initializeApp() {
 
   app.dock?.hide() // Hide dock icon (optional)
   app.commandLine.appendSwitch("disable-background-timer-throttling")
+
+  app.on("will-quit", () => {
+    AppState.getInstance().unregisterShortcuts();
+  });
 }
 
 // Start the application

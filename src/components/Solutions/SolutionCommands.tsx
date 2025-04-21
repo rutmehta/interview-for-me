@@ -28,20 +28,6 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
     }
   }, [isTooltipVisible, onTooltipVisibilityChange])
 
-  // Add keyboard event listener for Command+L keybind
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Check for Command+L combination
-      if (e.metaKey && e.key.toLowerCase() === 'l' && onLanguageToggle) {
-        e.preventDefault();
-        onLanguageToggle();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onLanguageToggle]);
-
   const handleMouseEnter = () => {
     setIsTooltipVisible(true)
   }
@@ -104,7 +90,11 @@ const SolutionCommands: React.FC<SolutionCommandsProps> = ({
           {/* Language Toggle */}
           <div className="flex items-center gap-2 whitespace-nowrap">
             <span className="text-[11px] leading-none">
-              {currentLanguage ? currentLanguage.charAt(0).toUpperCase() + currentLanguage.slice(1) : 'Language'}
+              {currentLanguage === 'javascript' ? 'JavaScript'
+                : currentLanguage === 'python' ? 'Python'
+                : currentLanguage === 'c' ? 'C'
+                : currentLanguage === 'cpp' ? 'C++'
+                : currentLanguage || 'Language'}
             </span>
             <div className="flex gap-1">
               <button className="bg-white/10 hover:bg-white/20 transition-colors rounded-md px-1.5 py-1 text-[11px] leading-none text-white/70">
