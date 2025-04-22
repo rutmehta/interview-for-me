@@ -32,6 +32,10 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY || "",
 });
 
+// Add supported languages at the top
+const SUPPORTED_LANGUAGES = ["python", "javascript", "cpp", "c"] as const;
+type SupportedLanguage = typeof SUPPORTED_LANGUAGES[number];
+
 export class ProcessingHelper {
   private appState: AppState
   private screenshotHelper: ScreenshotHelper
@@ -45,7 +49,7 @@ export class ProcessingHelper {
     this.screenshotHelper = appState.getScreenshotHelper()
   }
 
-  public async processScreenshots(): Promise<void> {
+  public async processScreenshots(userLanguage?: SupportedLanguage): Promise<void> {
     const mainWindow = this.appState.getMainWindow()
     if (!mainWindow) return
 
@@ -80,7 +84,8 @@ export class ProcessingHelper {
           console.log(screenshot.path)
         })
 
-        const result = await this.processScreenshotsHelper(screenshots, signal)
+        // Pass userLanguage to helper
+        const result = await this.processScreenshotsHelper(screenshots, signal, userLanguage)
 
         if (result.success) {
           console.log("Processing success:", result.data)
@@ -225,7 +230,7 @@ export class ProcessingHelper {
           // Step 2: Analyze the transcript to determine if it's a coding question
           console.log("Analyzing transcript to identify question type...");
           const analysisResponse = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4.1-mini",
             messages: [
               {
                 role: "system",
@@ -342,7 +347,7 @@ export class ProcessingHelper {
           } else {
             // Technical question or design question
             const technicalSolutionResponse = await openai.chat.completions.create({
-              model: "gpt-4o-mini",
+              model: "gpt-4.1-mini",
               messages: [
                 {
                   role: "system",
@@ -427,7 +432,8 @@ export class ProcessingHelper {
 
   private async processScreenshotsHelper(
     screenshots: Array<{ path: string }>,
-    signal: AbortSignal
+    signal: AbortSignal,
+    userLanguage?: SupportedLanguage
   ) {
     try {
       try {
@@ -609,7 +615,7 @@ export class ProcessingHelper {
 
         // Second API call - generate solutions
         if (mainWindow) {
-          const solutionsResult = await this.generateSolutionsHelper(signal)
+          const solutionsResult = await this.generateSolutionsHelper(signal, userLanguage)
           if (solutionsResult.success) {
             mainWindow.webContents.send(
               this.appState.PROCESSING_EVENTS.SOLUTION_SUCCESS,
@@ -663,7 +669,7 @@ export class ProcessingHelper {
     }
   }
 
-  private async generateSolutionsHelper(signal: AbortSignal) {
+  private async generateSolutionsHelper(signal: AbortSignal, userLanguage?: SupportedLanguage) {
     try {
       const problemInfo = this.appState.getProblemInfo()
       if (!problemInfo) {
@@ -675,10 +681,16 @@ export class ProcessingHelper {
 
         if (!isDevTest) {
           console.log("Generating solution with OpenAI...");
-          
           // Determine the content type
           const contentType = problemInfo.type || "leetcode_problem";
-          
+
+          // Figure out which languages to ask for
+          let languagesToRequest: SupportedLanguage[] = Array.from(SUPPORTED_LANGUAGES);
+          if (userLanguage && SUPPORTED_LANGUAGES.includes(userLanguage)) {
+            // Prioritize user selection, but still ask for all for code_map
+            languagesToRequest = [userLanguage, ...Array.from(SUPPORTED_LANGUAGES).filter(l => l !== userLanguage)];
+          }
+
           if (contentType === "leetcode_problem") {
             // Format the problem info for OpenAI - LeetCode problem
             const problemStatement = problemInfo.problem_statement;
@@ -686,55 +698,18 @@ export class ProcessingHelper {
             const outputFormat = JSON.stringify(problemInfo.output_format, null, 2);
             const constraints = JSON.stringify(problemInfo.constraints, null, 2);
             const testCases = JSON.stringify(problemInfo.test_cases, null, 2);
-            
+
             // Generate solution with OpenAI for LeetCode problem
             const solutionResponse = await openai.chat.completions.create({
               model: "gpt-4o-mini",
               messages: [
                 {
                   role: "system",
-                  content: `You are a coding expert tasked with generating optimal solutions for programming problems. 
-                          Please analyze the provided problem carefully and provide the best solution.
-                          Include detailed explanations, time and space complexity analysis, and elegant code.
-                          I need solutions in BOTH JavaScript and Python.
-                          Format your response as a valid JSON object with the following structure:
-                          {
-                            "solution": {
-                              "explanation": "Detailed explanation of your approach",
-                              "complexity": {
-                                "time": "O(...)",
-                                "space": "O(...)"
-                              },
-                              "code": {
-                                "javascript": "// Your JavaScript code here with proper line breaks",
-                                "python": "# Your Python code here with proper line breaks"
-                              }
-                            },
-                            "alternative_solutions": [
-                              {
-                                "explanation": "Alternative approach explanation",
-                                "complexity": {
-                                  "time": "O(...)",
-                                  "space": "O(...)"
-                                },
-                                "code": {
-                                  "javascript": "// Alternative JavaScript code",
-                                  "python": "# Alternative Python code"
-                                }
-                              }
-                            ]
-                          }
-                          Ensure your code has proper formatting, indentation, and line breaks. Do not escape newlines.
-                          Do not include any explanations outside the JSON. The entire response must be valid JSON.`
+                  content: `You are a coding expert tasked with generating optimal solutions for programming problems.\n\nPlease analyze the provided problem carefully and provide the best solution.\nInclude detailed explanations, time and space complexity analysis, and elegant code.\nI need solutions in the following languages: ${languagesToRequest.map(l => l === "cpp" ? "C++" : l === "c" ? "C" : l.charAt(0).toUpperCase() + l.slice(1)).join(", ")}.\nFormat your response as a valid JSON object with the following structure:\n{\n  \"solution\": {\n    \"explanation\": \"Detailed explanation of your approach\",\n    \"complexity\": {\n      \"time\": \"O(...)\",\n      \"space\": \"O(...)\"\n    },\n    \"code\": {${languagesToRequest.map(l => `\n      \"${l}\": \"// Your ${l === "cpp" ? "C++" : l === "c" ? "C" : l.charAt(0).toUpperCase() + l.slice(1)} code here\"`).join(",")}\n    }\n  },\n  \"alternative_solutions\": [\n    {\n      \"explanation\": \"Alternative approach explanation\",\n      \"complexity\": {\n        \"time\": \"O(...)\",\n        \"space\": \"O(...)\"\n      },\n      \"code\": {${languagesToRequest.map(l => `\n        \"${l}\": \"// Alternative ${l === "cpp" ? "C++" : l === "c" ? "C" : l.charAt(0).toUpperCase() + l.slice(1)} code\"`).join(",")}\n      }\n    }\n  ]\n}\nEnsure your code has proper formatting, indentation, and line breaks. Do not escape newlines.\nDo not include any explanations outside the JSON. The entire response must be valid JSON.`
                 },
                 {
                   role: "user",
-                  content: `Here's the problem:
-                          
-                          ${JSON.stringify(problemInfo)}
-                          
-                          Generate an optimal solution with detailed explanations, and provide the full code implementation 
-                          in BOTH JavaScript and Python.`
+                  content: `Here's the problem:\n\n${JSON.stringify(problemInfo)}\n\nGenerate an optimal solution with detailed explanations, and provide the full code implementation in the following languages: ${languagesToRequest.map(l => l === "cpp" ? "C++" : l === "c" ? "C" : l.charAt(0).toUpperCase() + l.slice(1)).join(", ")}.`
                 }
               ],
               max_tokens: 4096,
@@ -880,7 +855,6 @@ export class ProcessingHelper {
                 }
               ],
               max_tokens: 4096,
-              response_format: { type: "json_object" }
             });
             
             const aiTechnicalResponse = technicalSolutionResponse.choices[0]?.message?.content || "";
@@ -1436,3 +1410,7 @@ Return your response in JSON format with:
     }
   }
 }
+
+// Export types for use in renderer if needed
+export type { SupportedLanguage };
+export { SUPPORTED_LANGUAGES };

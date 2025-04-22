@@ -63,7 +63,7 @@ const SolutionSection = ({
       </h2>
       {onLanguageChange && (
         <div className="text-xs text-gray-400">
-          Press <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Cmd+L</kbd> to toggle language: <span className="text-white">{language === "javascript" ? "JavaScript" : language === "python" ? "Python" : language === "c" ? "C" : language === "cpp" ? "C++" : language}</span>
+          Press <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Cmd+L</kbd> to toggle language: <span className="text-white">{language === "python" ? "Python" : language === "javascript" ? "JavaScript" : language === "cpp" ? "C++" : "C"}</span>
         </div>
       )}
     </div>
@@ -150,7 +150,7 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
   const [problemStatementData, setProblemStatementData] =
     useState<BaseProblemData | null>(null)
   const [solutionData, setSolutionData] = useState<string | null>(null)
-  const [solutionLanguage, setSolutionLanguage] = useState<string>("javascript")
+  const [solutionLanguage, setSolutionLanguage] = useState<SupportedLanguage>("javascript")
   const [thoughtsData, setThoughtsData] = useState<string[] | null>(null)
   const [timeComplexityData, setTimeComplexityData] = useState<string | null>(
     null
@@ -216,21 +216,21 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     }
   }
 
-  const handleLanguageChange = (language: string) => {
-    setSolutionLanguage(language)
-    
+  const handleLanguageChange = (language: SupportedLanguage) => {
+    setSolutionLanguage(language);
     // Update the displayed solution based on selected language
     const solutionData = queryClient.getQueryData(["solution"]) as any
     if (solutionData?.code_map && solutionData.code_map[language]) {
       setSolutionData(solutionData.code_map[language])
+    } else {
+      // fallback to python if not available
+      setSolutionData(solutionData.code_map?.python || solutionData.code || null)
     }
   }
 
   const toggleLanguage = () => {
-    const languagesList = ["javascript", "python", "c", "cpp"];
-    const currentIndex = languagesList.indexOf(solutionLanguage);
-    const nextIndex = (currentIndex + 1) % languagesList.length;
-    const newLanguage = languagesList[nextIndex];
+    const idx = SUPPORTED_LANGUAGES.indexOf(solutionLanguage);
+    const newLanguage = SUPPORTED_LANGUAGES[(idx + 1) % SUPPORTED_LANGUAGES.length];
     handleLanguageChange(newLanguage);
   }
 
@@ -252,17 +252,17 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Toggle language with Command+L instead of Alt+L
+      // Toggle language with Command+L
       if (event.metaKey && event.key.toLowerCase() === 'l') {
         event.preventDefault();
         toggleLanguage();
       }
-      // Navigate to next file with Command+] instead of Alt+Right
+      // Navigate to next file with Command+]
       if (event.metaKey && event.key === ']') {
         event.preventDefault();
         navigateToNextFile();
       }
-      // Navigate to previous file with Command+[ instead of Alt+Left
+      // Navigate to prev file with Command+[
       if (event.metaKey && event.key === '[') {
         event.preventDefault();
         navigateToPrevFile();
@@ -270,10 +270,8 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [solutionLanguage, technicalSolution, currentFileIndex]); // Re-attach when solutionLanguage or currentFileIndex changes
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [toggleLanguage, navigateToNextFile, navigateToPrevFile]);
 
   useEffect(() => {
     // Height update logic
@@ -430,7 +428,9 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
             code: data.solution.code,
             code_map: data.solution.code_map || {
               javascript: data.solution.code,
-              python: "# No Python solution available"
+              python: "# No Python solution available",
+              cpp: "# No C++ solution available",
+              c: "# No C solution available"
             },
             thoughts: data.solution.thoughts,
             time_complexity: data.solution.time_complexity,
@@ -650,13 +650,17 @@ const Solutions: React.FC<SolutionsProps> = ({ setView }) => {
                                 : technicalSolution.file_structure[currentFileIndex].path.endsWith('.py') 
                                   ? 'python' 
                                   : technicalSolution.file_structure[currentFileIndex].path.endsWith('.cpp') || 
-                                    technicalSolution.file_structure[currentFileIndex].path.endsWith('.c') 
+                                    technicalSolution.file_structure[currentFileIndex].path.endsWith('.c++') || 
+                                    technicalSolution.file_structure[currentFileIndex].path.endsWith('.cxx') || 
+                                    technicalSolution.file_structure[currentFileIndex].path.endsWith('.cc') 
                                       ? 'cpp' 
-                                      : technicalSolution.file_structure[currentFileIndex].path.endsWith('.css') 
-                                        ? 'css' 
-                                        : technicalSolution.file_structure[currentFileIndex].path.endsWith('.html') 
-                                          ? 'html' 
-                                          : 'text'
+                                      : technicalSolution.file_structure[currentFileIndex].path.endsWith('.c') 
+                                        ? 'c' 
+                                        : technicalSolution.file_structure[currentFileIndex].path.endsWith('.css') 
+                                          ? 'css' 
+                                          : technicalSolution.file_structure[currentFileIndex].path.endsWith('.html') 
+                                            ? 'html' 
+                                            : 'text'
                             }
                             style={dracula}
                             customStyle={{
@@ -852,7 +856,7 @@ python app.py`}
                 content={solutionData || "No solution available"}
                 isLoading={!solutionData}
                 language={solutionLanguage}
-                onLanguageChange={handleLanguageChange}
+                onLanguageChange={toggleLanguage}
               />
             </>
           )}
@@ -915,5 +919,8 @@ python app.py`}
     </div>
   )
 }
+
+const SUPPORTED_LANGUAGES = ["python", "javascript", "cpp", "c"] as const;
+type SupportedLanguage = typeof SUPPORTED_LANGUAGES[number];
 
 export default Solutions
